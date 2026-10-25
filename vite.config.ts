@@ -4,8 +4,11 @@ import path from 'path';
 import {defineConfig} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
 
-export default defineConfig(() => {
+export default defineConfig(({command}) => {
+  const base = process.env.VITE_BASE_PATH || (command === 'build' ? '/MindMap-Jura/' : '/');
+
   return {
+    base,
     plugins: [
       react(),
       tailwindcss(),
@@ -13,30 +16,30 @@ export default defineConfig(() => {
         registerType: 'autoUpdate',
         includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png', 'pwa-maskable-512x512.png'],
         manifest: {
-          id: '/',
+          id: base,
           name: 'MinimalMap — Infinite Canvas Mind Map',
           short_name: 'MinimalMap',
           description: 'A minimal, trackpad-optimized infinite canvas mind map PWA with custom shapes, independent bubble and text colors, and deep tree export/import.',
           theme_color: '#F8FAFC',
           background_color: '#F8FAFC',
           display: 'standalone',
-          start_url: '/',
-          scope: '/',
+          start_url: base,
+          scope: base,
           icons: [
             {
-              src: '/pwa-192x192.png',
+              src: 'pwa-192x192.png',
               sizes: '192x192',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/pwa-512x512.png',
+              src: 'pwa-512x512.png',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/pwa-maskable-512x512.png',
+              src: 'pwa-maskable-512x512.png',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'maskable',
@@ -84,7 +87,7 @@ export default defineConfig(() => {
     ],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(import.meta.dirname || '.', '.'),
       },
     },
     server: {
