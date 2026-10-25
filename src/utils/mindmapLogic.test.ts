@@ -298,7 +298,7 @@ test('breaking circular parent references during import prevents infinite loops'
   // Cycle must be broken and at least one node must have parentId === null
   assert.ok(state.nodes.some((n) => n.parentId === null));
 
-  // Running auto-layout and export should complete without stack overflow
+  // Building tree and export should complete without stack overflow
   const tree = buildNestedTree(state.nodes);
   assert.ok(tree.length >= 1);
   const exported = serializeMindMap(state);

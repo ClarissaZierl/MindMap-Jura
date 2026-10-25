@@ -14,7 +14,6 @@ const KEYBOARD_SHORTCUTS = [
   { keys: 'Delete / Backspace', description: 'Delete selected node & branch' },
   { keys: '/ or Cmd + F', description: 'Focus word search bar' },
   { keys: '1 – 5', description: 'Apply & switch among the 5 Quick Defaults' },
-  { keys: 'L', description: 'Auto-layout and tidy nested hierarchy' },
   { keys: '+ / - / 0', description: 'Zoom in, zoom out, or reset canvas view' },
 ];
 

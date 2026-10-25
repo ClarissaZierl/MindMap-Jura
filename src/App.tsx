@@ -19,7 +19,6 @@ import {
   addFloatingNodeAt,
   addQuickChildNode,
   addQuickSiblingNode,
-  autoLayoutMindMap,
   computeFitViewport,
   createInitialMindMap,
   deleteNodeAndDescendants,
@@ -319,17 +318,6 @@ export default function App() {
         return;
       }
 
-      if (e.key.toLowerCase() === 'l' && !e.metaKey && !e.ctrlKey) {
-        e.preventDefault();
-        setState((prev) => ({
-          ...prev,
-          nodes: autoLayoutMindMap(prev.nodes),
-          viewport: { panX: 0, panY: 0, zoom: 1 },
-        }));
-        triggerToast('Auto-arranged nested nodes');
-        return;
-      }
-
       if (e.key === '=' || e.key === '+') {
         e.preventDefault();
         setState((prev) => ({
@@ -612,28 +600,11 @@ export default function App() {
           MinimalMap
         </a>
 
-        {/* Zone 2: 4 concise single-line text navigation links */}
+        {/* Zone 2: 3 concise single-line text navigation links */}
         <nav
           aria-label="Workspace actions"
           className="flex items-center gap-6 text-xs font-medium text-slate-600"
         >
-          <button
-            type="button"
-            onClick={() => {
-              setState((prev) => {
-                const laidOut = autoLayoutMindMap(prev.nodes);
-                return {
-                  ...prev,
-                  nodes: laidOut,
-                  viewport: computeFitViewport(laidOut),
-                };
-              });
-              triggerToast('Auto-arranged mind map hierarchy');
-            }}
-            className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            Auto-Layout
-          </button>
           <button
             type="button"
             onClick={() =>
