@@ -1,0 +1,6 @@
+{
+  "name": "MinimalMap",
+  "description": "A minimal, trackpad-optimized infinite canvas mind map PWA with custom shapes, independent bubble and text colors, deep tree export/import, and keyboard navigation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
