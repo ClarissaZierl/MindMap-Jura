@@ -155,3 +155,172 @@ test('case-insensitive search and subtree deletion work accurately', () => {
   const rightId = getNextNodeByDirection(afterDelete.nodes, 'root', 'right');
   assert.ok(rightId === 'node-design' || rightId === 'node-launch');
 });
+
+test('shape normalization is case-insensitive and color expands 3-digit hex', () => {
+  const jsonWithMixedCases = JSON.stringify({
+    title: 'Normalization Test Map',
+    tree: [
+      {
+        id: 'norm-root',
+        text: 'Root',
+        shape: 'HEXAGON',
+        bubbleColor: '#fff',
+        textColor: '#000',
+        children: [
+          {
+            id: 'norm-box',
+            text: 'Box Child',
+            shape: 'Box',
+            bubbleColor: '#123',
+            textColor: '#abc',
+            children: [],
+          },
+          {
+            id: 'norm-tri',
+            text: 'Triangle Child',
+            shape: 'tRiAnGlE',
+            bubbleColor: '#FFE4E6',
+            textColor: '#881337',
+            children: [],
+          },
+        ],
+      },
+    ],
+  });
+
+  const state = deserializeMindMap(jsonWithMixedCases);
+  assert.equal(state.nodes[0].shape, 'hexagon');
+  assert.equal(state.nodes[0].bubbleColor, '#FFFFFF');
+  assert.equal(state.nodes[0].textColor, '#000000');
+
+  const boxNode = state.nodes.find((n) => n.id === 'norm-box')!;
+  assert.equal(boxNode.shape, 'box');
+  assert.equal(boxNode.bubbleColor, '#112233');
+  assert.equal(boxNode.textColor, '#AABBCC');
+
+  const triNode = state.nodes.find((n) => n.id === 'norm-tri')!;
+  assert.equal(triNode.shape, 'triangle');
+});
+
+test('complex multi-root 7-level Jura legal mindmap imports and exports with 100% fidelity', () => {
+  const juraTemplate = SAMPLE_DEEP_NESTED_TEMPLATES.find(
+    (t) => t.id === 'jura-examens-systematik'
+  )!;
+  assert.ok(juraTemplate, 'Jura legal template must be present');
+
+  // Import template JSON
+  const state = deserializeMindMap(JSON.stringify(juraTemplate.data));
+
+  assert.equal(state.title, 'Jura Examens-Systematik (BGB & StGB)');
+  assert.equal(state.activeDefaultId, 'preset-jura-norm');
+  assert.equal(state.presets.length, 5);
+  assert.ok(state.nodes.length >= 25, `Expected >= 25 nodes, got ${state.nodes.length}`);
+
+  // Verify multiple roots exist (Zivilrecht BGB and Strafrecht StGB)
+  const roots = state.nodes.filter((n) => n.parentId === null);
+  assert.equal(roots.length, 2, 'Must have exactly 2 root nodes for BGB and StGB');
+  assert.ok(roots.some((r) => r.text.includes('Zivilrecht')));
+  assert.ok(roots.some((r) => r.text.includes('Strafrecht')));
+
+  // Verify deepest 7-level nesting via search breadcrumb
+  const deepMatch = searchNodes(state.nodes, 'Rechtsbindungswille');
+  assert.equal(deepMatch.length, 1);
+  assert.equal(deepMatch[0].depth, 5); // 0 (Root) -> 1 (BGB AT) -> 2 (Rechtsgeschäftslehre) -> 3 (WE) -> 4 (Objektiver TB) -> 5 (Rechtsbindungswille)
+  assert.equal(deepMatch[0].node.shape, 'diamond');
+  assert.ok(deepMatch[0].node.notes?.includes('§§ 133, 157 BGB'));
+
+  // Verify full export and re-import preserves all nodes, shapes, colors, and notes
+  const exportedJson = serializeMindMap(state);
+  const reimported = deserializeMindMap(exportedJson);
+
+  assert.equal(reimported.nodes.length, state.nodes.length);
+  assert.equal(reimported.title, state.title);
+  assert.equal(reimported.activeDefaultId, state.activeDefaultId);
+
+  // Check specific node in reimported state
+  const reimportedNode = reimported.nodes.find(
+    (n) => n.text === 'Verkehrswesentliche Eigenschaft (§ 119 II)'
+  )!;
+  assert.ok(reimportedNode);
+  assert.equal(reimportedNode.shape, 'hexagon');
+  assert.equal(reimportedNode.bubbleColor, '#E0E7FF');
+  assert.equal(reimportedNode.textColor, '#1E3A8A');
+  assert.ok(reimportedNode.notes?.includes('Wertbildende Faktoren'));
+});
+
+test('markdown outline import parses hierarchy, shapes, colors, and notes correctly', () => {
+  const mdInput = `# Jura Schuldrecht AT
+
+- **Schuldverhältnis** \`[shape: hexagon, bubble: #0F172A, text: #FFFFFF, notes: Entsteht durch Vertrag oder Gesetz]\`
+  - **Vertragliche Ansprüche** \`[shape: box, bubble: #FEF3C7, text: #78350F]\`
+    - **Primäranspruch (§ 433 I BGB)** \`[shape: bubble, bubble: #D1FAE5, text: #064E3B]\`
+    - **Sekundäranspruch (§ 280 I BGB)** \`[shape: diamond, bubble: #FFE4E6, text: #881337, notes: Pflichtverletzung, Vertretenmüssen]\`
+      - **Schadensersatz statt der Leistung** \`[shape: triangle, bubble: #FFEDD5, text: #9A3412]\`
+`;
+
+  const state = deserializeMindMap(mdInput);
+  assert.equal(state.title, 'Jura Schuldrecht AT');
+  assert.equal(state.nodes.length, 5);
+
+  const root = state.nodes.find((n) => n.parentId === null)!;
+  assert.equal(root.text, 'Schuldverhältnis');
+  assert.equal(root.shape, 'hexagon');
+  assert.equal(root.bubbleColor, '#0F172A');
+  assert.equal(root.textColor, '#FFFFFF');
+  assert.equal(root.notes, 'Entsteht durch Vertrag oder Gesetz');
+
+  const leaf = state.nodes.find((n) => n.text === 'Schadensersatz statt der Leistung')!;
+  assert.ok(leaf);
+  assert.equal(leaf.shape, 'triangle');
+  assert.equal(leaf.bubbleColor, '#FFEDD5');
+  assert.equal(leaf.textColor, '#9A3412');
+
+  // Verify round-trip markdown export
+  const mdExport = exportToMarkdown(state);
+  assert.ok(mdExport.includes('# Jura Schuldrecht AT'));
+  assert.ok(mdExport.includes('Schuldverhältnis'));
+  assert.ok(mdExport.includes('Schadensersatz statt der Leistung'));
+  assert.ok(mdExport.includes('notes: Entsteht durch Vertrag oder Gesetz'));
+});
+
+test('breaking circular parent references during import prevents infinite loops', () => {
+  // A -> B -> C -> A (cycle)
+  const cyclicJson = JSON.stringify({
+    title: 'Cyclic Graph',
+    nodes: [
+      { id: 'node-a', parentId: 'node-c', text: 'Node A', x: 0, y: 0 },
+      { id: 'node-b', parentId: 'node-a', text: 'Node B', x: 100, y: 0 },
+      { id: 'node-c', parentId: 'node-b', text: 'Node C', x: 200, y: 0 },
+    ],
+  });
+
+  const state = deserializeMindMap(cyclicJson);
+  // Cycle must be broken and at least one node must have parentId === null
+  assert.ok(state.nodes.some((n) => n.parentId === null));
+
+  // Running auto-layout and export should complete without stack overflow
+  const tree = buildNestedTree(state.nodes);
+  assert.ok(tree.length >= 1);
+  const exported = serializeMindMap(state);
+  assert.ok(exported.length > 0);
+});
+
+test('handles JSON with empty nodes array alongside tree', () => {
+  const json = JSON.stringify({
+    title: 'Empty Nodes Beside Tree',
+    nodes: [],
+    tree: [
+      {
+        id: 't-root',
+        text: 'Tree Root',
+        shape: 'box',
+        children: [{ id: 't-c1', text: 'Child 1', children: [] }],
+      },
+    ],
+  });
+
+  const state = deserializeMindMap(json);
+  assert.equal(state.nodes.length, 2);
+  assert.equal(state.nodes[0].text, 'Tree Root');
+  assert.equal(state.nodes[1].text, 'Child 1');
+});

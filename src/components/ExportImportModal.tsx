@@ -106,6 +106,7 @@ export const ExportImportModal: React.FC<ExportImportModalProps> = ({
       setImportError('Failed to read the selected file.');
     };
     reader.readAsText(file);
+    e.target.value = '';
   };
 
   return (
@@ -263,12 +264,12 @@ export const ExportImportModal: React.FC<ExportImportModalProps> = ({
               <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
                 <div>
                   <p className="text-xs font-semibold text-slate-800">
-                    Load from JSON File or Deep-Nesting Presets
+                    Load from JSON or Markdown File or Deep-Nesting Presets
                   </p>
                   <p className="text-xs text-slate-500">
-                    Supports both flat node lists and deeply nested recursive{' '}
+                    Supports JSON (flat lists or recursive{' '}
                     <code className="font-mono text-slate-700">children</code>{' '}
-                    trees.
+                    trees) and Markdown outlines.
                   </p>
                 </div>
 
@@ -276,10 +277,10 @@ export const ExportImportModal: React.FC<ExportImportModalProps> = ({
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".json,application/json"
+                    accept=".json,.md,.txt,application/json,text/markdown,text/plain"
                     onChange={handleFileUpload}
                     className="sr-only"
-                    aria-label="Upload JSON file"
+                    aria-label="Upload JSON or Markdown file"
                   />
                   <button
                     type="button"
@@ -287,7 +288,7 @@ export const ExportImportModal: React.FC<ExportImportModalProps> = ({
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
                   >
                     <Upload className="w-3.5 h-3.5" />
-                    <span>Choose .json File</span>
+                    <span>Choose .json or .md File</span>
                   </button>
                 </div>
               </div>
@@ -345,7 +346,7 @@ export const ExportImportModal: React.FC<ExportImportModalProps> = ({
                     htmlFor="import-json-textarea"
                     className="block text-xs font-medium text-slate-700"
                   >
-                    Paste or Edit Mind Map JSON
+                    Paste or Edit Mind Map (JSON or Markdown Outline)
                   </label>
                   <button
                     type="button"
@@ -365,7 +366,7 @@ export const ExportImportModal: React.FC<ExportImportModalProps> = ({
                     setImportText(e.target.value);
                     if (importError) setImportError(null);
                   }}
-                  placeholder='{"title": "My Map", "tree": [{"id": "root", "text": "Central Idea", "shape": "bubble", "bubbleColor": "#FFFFFF", "textColor": "#0F172A", "children": [...]}]}'
+                  placeholder='{"title": "My Map", "tree": [{"id": "root", "text": "Central Idea", "shape": "bubble", "bubbleColor": "#FFFFFF", "textColor": "#0F172A", "children": [...]}]} or Markdown outline (# Title, - **Node**)'
                   rows={8}
                   className="w-full rounded-lg border border-slate-200 bg-white p-3 font-mono text-xs text-slate-800 focus:outline-none focus:border-slate-900"
                 />
@@ -394,7 +395,7 @@ export const ExportImportModal: React.FC<ExportImportModalProps> = ({
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-slate-900 text-xs font-medium text-white hover:bg-slate-800 cursor-pointer"
                 >
                   <Upload className="w-3.5 h-3.5" />
-                  <span>Import JSON Data</span>
+                  <span>Import Mind Map</span>
                 </button>
               </div>
             </>

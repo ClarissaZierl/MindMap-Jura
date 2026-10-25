@@ -87,13 +87,31 @@ export const TEXT_COLOR_PALETTE: { label: string; value: string }[] = [
 ];
 
 export function isValidShape(shape: unknown): shape is NodeShape {
-  return typeof shape === 'string' && VALID_SHAPES.includes(shape as NodeShape);
+  if (typeof shape !== 'string') return false;
+  return VALID_SHAPES.includes(shape.trim().toLowerCase() as NodeShape);
+}
+
+export function normalizeShape(
+  shape: unknown,
+  fallback: NodeShape = 'bubble'
+): NodeShape {
+  if (typeof shape !== 'string') return fallback;
+  const lower = shape.trim().toLowerCase();
+  return VALID_SHAPES.includes(lower as NodeShape)
+    ? (lower as NodeShape)
+    : fallback;
 }
 
 export function normalizeColor(color: unknown, fallback: string): string {
   if (typeof color !== 'string') return fallback;
   const trimmed = color.trim();
-  if (/^#[0-9A-Fa-f]{3,8}$/.test(trimmed)) {
+  if (/^#[0-9A-Fa-f]{3}$/.test(trimmed)) {
+    const r = trimmed[1];
+    const g = trimmed[2];
+    const b = trimmed[3];
+    return `#${r}${r}${g}${g}${b}${b}`.toUpperCase();
+  }
+  if (/^#[0-9A-Fa-f]{6}$/.test(trimmed) || /^#[0-9A-Fa-f]{8}$/.test(trimmed)) {
     return trimmed.toUpperCase();
   }
   return fallback;
@@ -716,7 +734,7 @@ export function flattenNestedTree(
         ? item.label
         : 'Untitled Node';
 
-    const shape: NodeShape = isValidShape(item.shape) ? item.shape : 'bubble';
+    const shape: NodeShape = normalizeShape(item.shape, 'bubble');
     const bubbleColor = normalizeColor(item.bubbleColor, '#FFFFFF');
     const textColor = normalizeColor(item.textColor, '#0F172A');
 
@@ -761,14 +779,169 @@ export function flattenNestedTree(
   return { nodes: flat, needsAutoLayout };
 }
 
-export function deserializeMindMap(
-  rawJson: string,
+export function parseMarkdownToMindMap(
+  markdown: string,
   currentState?: MindMapState
 ): MindMapState {
+  const lines = markdown.split(/\r?\n/);
+  let title = 'Imported Mind Map';
+
+  interface RawItem {
+    depth: number;
+    text: string;
+    shape: NodeShape;
+    bubbleColor: string;
+    textColor: string;
+    notes?: string;
+  }
+
+  const items: RawItem[] = [];
+
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\r/, '');
+    if (!line.trim()) continue;
+
+    // Check title line e.g. # Title
+    const titleMatch = line.match(/^#\s+(.+)$/);
+    if (titleMatch && items.length === 0) {
+      title = titleMatch[1].trim();
+      continue;
+    }
+
+    // Match list item with indentation:
+    // e.g. "    - **Node Text** `[shape: box, bubble: #FEF3C7, text: #78350F, notes: ...]`"
+    // or "  * Some Idea"
+    const match = line.match(/^(\s*)(?:[-*+]|\d+\.)\s+(.+)$/);
+    if (!match) continue;
+
+    const indentStr = match[1];
+    const indentLevel = indentStr.replace(/\t/g, '  ').length;
+    let content = match[2].trim();
+
+    let shape: NodeShape = 'bubble';
+    let bubbleColor = '#FFFFFF';
+    let textColor = '#0F172A';
+    let notes: string | undefined;
+
+    // Extract optional metadata: `[shape: ..., bubble: ..., text: ..., notes: ...]`
+    const metaMatch = content.match(/`\[([^\]]+)\]`/);
+    if (metaMatch) {
+      const metaStr = metaMatch[1];
+      content = content.replace(metaMatch[0], '').trim();
+
+      const pairs = metaStr.split(',').map((p) => p.trim());
+      for (const pair of pairs) {
+        const [k, ...vParts] = pair.split(':');
+        const key = k?.trim().toLowerCase();
+        const val = vParts.join(':').trim();
+        if (key === 'shape') {
+          shape = normalizeShape(val, 'bubble');
+        } else if (key === 'bubble' || key === 'bubblecolor') {
+          bubbleColor = normalizeColor(val, '#FFFFFF');
+        } else if (key === 'text' || key === 'textcolor') {
+          textColor = normalizeColor(val, '#0F172A');
+        } else if (key === 'notes') {
+          notes = val.replace(/\\n/g, '\n');
+        }
+      }
+    }
+
+    // Strip Markdown bold/italic formatting around text: **Text** -> Text
+    const textClean = content
+      .replace(/^\*\*([^*]+)\*\*$/, '$1')
+      .replace(/^__([^_]+)__$/, '$1')
+      .replace(/^\*([^*]+)\*$/, '$1')
+      .trim();
+
+    items.push({
+      depth: indentLevel,
+      text: textClean || 'Untitled Node',
+      shape,
+      bubbleColor,
+      textColor,
+      ...(notes ? { notes } : {}),
+    });
+  }
+
+  if (items.length === 0) {
+    throw new Error('No valid mind map list items found in Markdown outline.');
+  }
+
+  // Convert flat indented items to nested tree using a depth stack
+  const stack: { depth: number; node: NestedMindMapNode }[] = [];
+  const roots: NestedMindMapNode[] = [];
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const node: NestedMindMapNode = {
+      id: generateNodeId('md'),
+      text: item.text,
+      shape: item.shape,
+      bubbleColor: item.bubbleColor,
+      textColor: item.textColor,
+      ...(item.notes ? { notes: item.notes } : {}),
+      children: [],
+    };
+
+    while (stack.length > 0 && stack[stack.length - 1].depth >= item.depth) {
+      stack.pop();
+    }
+
+    if (stack.length === 0) {
+      roots.push(node);
+    } else {
+      stack[stack.length - 1].node.children.push(node);
+    }
+
+    stack.push({ depth: item.depth, node });
+  }
+
+  const { nodes } = flattenNestedTree(roots);
+  const laidOutNodes = autoLayoutMindMap(nodes);
+  const presets =
+    currentState?.presets || FIVE_DEFAULT_PRESETS.map((p) => ({ ...p }));
+  const rootNode =
+    laidOutNodes.find((n) => n.parentId === null) || laidOutNodes[0];
+
+  return {
+    title,
+    nodes: laidOutNodes,
+    selectedNodeId: rootNode.id,
+    editingNodeId: null,
+    activeDefaultId: presets[0].id,
+    presets,
+    viewport: computeFitViewport(laidOutNodes),
+  };
+}
+
+export function deserializeMindMap(
+  rawJsonOrMarkdown: string,
+  currentState?: MindMapState
+): MindMapState {
+  if (!rawJsonOrMarkdown || typeof rawJsonOrMarkdown !== 'string') {
+    throw new Error('Imported data must be a non-empty string.');
+  }
+
+  const trimmed = rawJsonOrMarkdown.trim();
+
+  // Check if input is Markdown outline (e.g. begins with # or list bullet)
+  const isLikelyMarkdown =
+    !trimmed.startsWith('{') &&
+    !trimmed.startsWith('[') &&
+    (trimmed.startsWith('#') || /^(\s*[-*+]|\s*\d+\.)\s+/m.test(trimmed));
+
+  if (isLikelyMarkdown) {
+    return parseMarkdownToMindMap(trimmed, currentState);
+  }
+
   let parsed: unknown;
   try {
-    parsed = JSON.parse(rawJson);
+    parsed = JSON.parse(trimmed);
   } catch (err) {
+    // Fallback: if JSON parse failed but contains markdown list items
+    if (trimmed.startsWith('#') || /^(\s*[-*+]|\s*\d+\.)\s+/m.test(trimmed)) {
+      return parseMarkdownToMindMap(trimmed, currentState);
+    }
     throw new Error(
       `Invalid JSON format: ${err instanceof Error ? err.message : 'Parse error'}`
     );
@@ -782,16 +955,24 @@ export function deserializeMindMap(
   let extractedNodes: MindMapNode[] = [];
   let needsLayout = false;
 
-  // Case 1: Recursive tree array provided at obj.tree (and either obj.nodes is absent or tree has nodes)
-  if (Array.isArray(obj.tree) && obj.tree.length > 0 && !Array.isArray(obj.nodes)) {
+  // Case 1: Recursive tree array provided at obj.tree
+  const hasTree = Array.isArray(obj.tree) && obj.tree.length > 0;
+  const hasNodes = Array.isArray(obj.nodes) && obj.nodes.length > 0;
+
+  if (
+    hasTree &&
+    (!hasNodes ||
+      (Array.isArray(obj.tree) &&
+        Array.isArray(obj.nodes) &&
+        obj.tree.length > obj.nodes.length))
+  ) {
     const res = flattenNestedTree(obj.tree as NestedMindMapNode[]);
     extractedNodes = res.nodes;
     needsLayout = res.needsAutoLayout;
-  } else if (Array.isArray(obj.nodes) && obj.nodes.length > 0) {
-    // Case 2: Standard flat nodes array (which may ALSO exist alongside obj.tree)
-    // Check if obj.tree has deeper/more recent edits or if obj.nodes is authoritative
+  } else if (hasNodes) {
+    // Case 2: Standard flat nodes array
     const usedIds = new Set<string>();
-    for (const raw of obj.nodes) {
+    for (const raw of obj.nodes as unknown[]) {
       if (!raw || typeof raw !== 'object') continue;
       const item = raw as Record<string, unknown>;
       let id =
@@ -817,7 +998,7 @@ export function deserializeMindMap(
           typeof item.text === 'string' && item.text.trim().length > 0
             ? item.text
             : 'Untitled Node',
-        shape: isValidShape(item.shape) ? item.shape : 'bubble',
+        shape: normalizeShape(item.shape, 'bubble'),
         bubbleColor: normalizeColor(item.bubbleColor, '#FFFFFF'),
         textColor: normalizeColor(item.textColor, '#0F172A'),
         x: hasX ? Math.round(item.x as number) : 0,
@@ -831,14 +1012,20 @@ export function deserializeMindMap(
   } else if (Array.isArray(parsed)) {
     // Case 3: Top-level array of nested or flat nodes
     const hasChildrenProp = parsed.some(
-      (item) => item && typeof item === 'object' && Array.isArray((item as Record<string, unknown>).children)
+      (item) =>
+        item &&
+        typeof item === 'object' &&
+        Array.isArray((item as Record<string, unknown>).children)
     );
     if (hasChildrenProp) {
       const res = flattenNestedTree(parsed as NestedMindMapNode[]);
       extractedNodes = res.nodes;
       needsLayout = res.needsAutoLayout;
     } else {
-      return deserializeMindMap(JSON.stringify({ nodes: parsed }), currentState);
+      return deserializeMindMap(
+        JSON.stringify({ nodes: parsed }),
+        currentState
+      );
     }
   } else if (typeof obj.text === 'string' || Array.isArray(obj.children)) {
     // Case 4: Single root object with nested children
@@ -861,17 +1048,40 @@ export function deserializeMindMap(
         : null,
   }));
 
+  // Break any cyclical parent-child relationships
+  const idToNode = new Map<string, MindMapNode>(
+    extractedNodes.map((n) => [n.id, n])
+  );
+  for (const node of extractedNodes) {
+    if (!node.parentId) continue;
+    const chain = new Set<string>([node.id]);
+    let curr: string | null = node.parentId;
+    while (curr) {
+      if (chain.has(curr)) {
+        node.parentId = null; // Break cycle safely
+        break;
+      }
+      chain.add(curr);
+      curr = idToNode.get(curr)?.parentId || null;
+    }
+  }
+
   // Ensure at least one root node exists (break cycle if every node had a parentId)
   if (!extractedNodes.some((n) => n.parentId === null)) {
     extractedNodes[0] = { ...extractedNodes[0], parentId: null };
   }
 
-  if (needsLayout) {
+  if (
+    needsLayout ||
+    (extractedNodes.length > 1 &&
+      extractedNodes.every((n) => n.x === 0 && n.y === 0))
+  ) {
     extractedNodes = autoLayoutMindMap(extractedNodes);
   }
 
   // Validate presets if provided
-  let presets = currentState?.presets || FIVE_DEFAULT_PRESETS.map((p) => ({ ...p }));
+  let presets =
+    currentState?.presets || FIVE_DEFAULT_PRESETS.map((p) => ({ ...p }));
   if (Array.isArray(obj.presets) && obj.presets.length >= 1) {
     const parsedPresets: StylePreset[] = [];
     for (const rawPreset of obj.presets) {
@@ -883,7 +1093,7 @@ export function deserializeMindMap(
           name: p.name,
           description:
             typeof p.description === 'string' ? p.description : 'Custom preset',
-          shape: isValidShape(p.shape) ? p.shape : 'bubble',
+          shape: normalizeShape(p.shape, 'bubble'),
           bubbleColor: normalizeColor(p.bubbleColor, '#FFFFFF'),
           textColor: normalizeColor(p.textColor, '#0F172A'),
         });
@@ -904,8 +1114,10 @@ export function deserializeMindMap(
   if (obj.viewport && typeof obj.viewport === 'object') {
     const vp = obj.viewport as Record<string, unknown>;
     viewport = {
-      panX: typeof vp.panX === 'number' && Number.isFinite(vp.panX) ? vp.panX : 0,
-      panY: typeof vp.panY === 'number' && Number.isFinite(vp.panY) ? vp.panY : -45,
+      panX:
+        typeof vp.panX === 'number' && Number.isFinite(vp.panX) ? vp.panX : 0,
+      panY:
+        typeof vp.panY === 'number' && Number.isFinite(vp.panY) ? vp.panY : -45,
       zoom:
         typeof vp.zoom === 'number' && Number.isFinite(vp.zoom)
           ? Math.min(2.5, Math.max(0.25, vp.zoom))
@@ -948,7 +1160,7 @@ export function computeFitViewport(nodes: MindMapNode[]): ViewportState {
   const spanY = Math.max(300, maxY - minY);
   const zoomX = 1240 / spanX;
   const zoomY = 580 / spanY;
-  const zoom = Math.min(1, Math.max(0.45, Number(Math.min(zoomX, zoomY).toFixed(2))));
+  const zoom = Math.min(1, Math.max(0.28, Number(Math.min(zoomX, zoomY).toFixed(2))));
 
   const centerX = (minX + maxX) / 2;
   const centerY = (minY + maxY) / 2;
@@ -966,7 +1178,15 @@ export function exportToMarkdown(state: MindMapState): string {
 
   function walk(node: NestedMindMapNode, depth: number) {
     const indent = '  '.repeat(depth);
-    const meta = `[shape: ${node.shape}, bubble: ${node.bubbleColor}, text: ${node.textColor}]`;
+    const metaParts = [
+      `shape: ${node.shape}`,
+      `bubble: ${node.bubbleColor}`,
+      `text: ${node.textColor}`,
+    ];
+    if (node.notes) {
+      metaParts.push(`notes: ${node.notes.replace(/\r?\n/g, '\\n')}`);
+    }
+    const meta = `[${metaParts.join(', ')}]`;
     lines.push(`${indent}- **${node.text}** \`${meta}\``);
     for (const child of node.children) {
       walk(child, depth + 1);
@@ -1217,6 +1437,307 @@ export const SAMPLE_DEEP_NESTED_TEMPLATES: {
                   children: [],
                 },
               ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    id: 'jura-examens-systematik',
+    name: 'Jura Examens-Systematik: Zivil- & Strafrecht (7 Levels, Multi-Root)',
+    description:
+      'Komplexe 7-Ebenen-Systematik mit mehreren Wurzeln (BGB & StGB), Paragraphen-Boxen, Streitstands-Rauten, Definitionen-Sechsecken, Notizen & Rechtsfolgen.',
+    data: {
+      title: 'Jura Examens-Systematik (BGB & StGB)',
+      activeDefaultId: 'preset-jura-norm',
+      presets: [
+        {
+          id: 'preset-jura-norm',
+          name: '§ Norm / Box',
+          description: 'Gesetzesnormen & Paragraphen',
+          shape: 'box',
+          bubbleColor: '#FEF3C7',
+          textColor: '#78350F',
+        },
+        {
+          id: 'preset-jura-def',
+          name: 'Definition / Hex',
+          description: 'Feste Rechtsbegriffe & Definitionen',
+          shape: 'hexagon',
+          bubbleColor: '#E0E7FF',
+          textColor: '#1E3A8A',
+        },
+        {
+          id: 'preset-jura-dispute',
+          name: 'Streitstand / Raute',
+          description: 'Meinungsstreit (h.M. vs. a.A.)',
+          shape: 'diamond',
+          bubbleColor: '#FFE4E6',
+          textColor: '#881337',
+        },
+        {
+          id: 'preset-jura-subsumption',
+          name: 'Subsumtion / Bubble',
+          description: 'Tatbestandsmerkmale & Prüfungsschritte',
+          shape: 'bubble',
+          bubbleColor: '#D1FAE5',
+          textColor: '#064E3B',
+        },
+        {
+          id: 'preset-jura-consequence',
+          name: 'Rechtsfolge / Dreieck',
+          description: 'Ansprüche, Nichtigkeit & Schadensersatz',
+          shape: 'triangle',
+          bubbleColor: '#FFEDD5',
+          textColor: '#9A3412',
+        },
+      ],
+      tree: [
+        {
+          id: 'jura-bgb-root',
+          text: 'Zivilrecht (BGB Systematik)',
+          shape: 'hexagon',
+          bubbleColor: '#0F172A',
+          textColor: '#FFFFFF',
+          notes: 'Grundpfeiler des deutschen Privatrechts',
+          children: [
+            {
+              id: 'jura-bgb-at',
+              text: 'Allgemeiner Teil (BGB AT)',
+              shape: 'box',
+              bubbleColor: '#FEF3C7',
+              textColor: '#78350F',
+              children: [
+                {
+                  id: 'jura-we',
+                  text: 'Rechtsgeschäftslehre & WE',
+                  shape: 'diamond',
+                  bubbleColor: '#E0E7FF',
+                  textColor: '#1E3A8A',
+                  children: [
+                    {
+                      id: 'jura-we-bestandteile',
+                      text: 'Bestandteile der Willenserklärung',
+                      shape: 'bubble',
+                      bubbleColor: '#D1FAE5',
+                      textColor: '#064E3B',
+                      children: [
+                        {
+                          id: 'jura-obj-tb',
+                          text: 'Objektiver Tatbestand',
+                          shape: 'box',
+                          bubbleColor: '#F1F5F9',
+                          textColor: '#334155',
+                          children: [
+                            {
+                              id: 'jura-rbw',
+                              text: 'Rechtsbindungswille (Abgrenzung Gefälligkeit)',
+                              shape: 'diamond',
+                              bubbleColor: '#FFE4E6',
+                              textColor: '#881337',
+                              notes:
+                                'Auslegung nach §§ 133, 157 BGB (objektiver Empfängerhorizont)',
+                              children: [],
+                            },
+                          ],
+                        },
+                        {
+                          id: 'jura-subj-tb',
+                          text: 'Subjektiver Tatbestand',
+                          shape: 'box',
+                          bubbleColor: '#F1F5F9',
+                          textColor: '#334155',
+                          children: [
+                            {
+                              id: 'jura-pot-erklaerungsbewusstsein',
+                              text: 'Potenzielles Erklärungsbewusstsein (h.M.)',
+                              shape: 'hexagon',
+                              bubbleColor: '#E0E7FF',
+                              textColor: '#1E3A8A',
+                              notes:
+                                'Bei pflichtgemäßer Sorgfalt hätte der Erklärende erkennen können, dass sein Verhalten als WE aufgefasst wird.',
+                              children: [],
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    {
+                      id: 'jura-anfechtung',
+                      text: 'Anfechtung von Willenserklärungen',
+                      shape: 'diamond',
+                      bubbleColor: '#FFE4E6',
+                      textColor: '#881337',
+                      notes: 'Gestaltungsrecht zur rückwirkenden Beseitigung',
+                      children: [
+                        {
+                          id: 'jura-anf-grund',
+                          text: '1. Anfechtungsgrund (§§ 119, 120, 123 BGB)',
+                          shape: 'box',
+                          bubbleColor: '#FEF3C7',
+                          textColor: '#78350F',
+                          children: [
+                            {
+                              id: 'jura-irrtum-inhalte',
+                              text: 'Inhaltsirrtum (§ 119 I Alt. 1)',
+                              shape: 'bubble',
+                              bubbleColor: '#FFFFFF',
+                              textColor: '#0F172A',
+                              children: [],
+                            },
+                            {
+                              id: 'jura-irrtum-erklaerung',
+                              text: 'Erklärungsirrtum (§ 119 I Alt. 2: Versprechen, Verschreiben)',
+                              shape: 'bubble',
+                              bubbleColor: '#FFFFFF',
+                              textColor: '#0F172A',
+                              children: [],
+                            },
+                            {
+                              id: 'jura-irrtum-eigenschaft',
+                              text: 'Verkehrswesentliche Eigenschaft (§ 119 II)',
+                              shape: 'hexagon',
+                              bubbleColor: '#E0E7FF',
+                              textColor: '#1E3A8A',
+                              notes:
+                                'Wertbildende Faktoren der Person oder Sache, nicht der Preis/Wert an sich.',
+                              children: [],
+                            },
+                            {
+                              id: 'jura-taeuschung',
+                              text: 'Arglistige Täuschung oder Drohung (§ 123 BGB)',
+                              shape: 'diamond',
+                              bubbleColor: '#FFE4E6',
+                              textColor: '#881337',
+                              children: [],
+                            },
+                          ],
+                        },
+                        {
+                          id: 'jura-anf-erklaerung',
+                          text: '2. Anfechtungserklärung (§ 143 BGB) & Frist (§§ 121, 124)',
+                          shape: 'box',
+                          bubbleColor: '#FEF3C7',
+                          textColor: '#78350F',
+                          children: [],
+                        },
+                        {
+                          id: 'jura-anf-folge',
+                          text: '3. Rechtsfolge: Nichtigkeit ex tunc (§ 142 I) & Vertrauensschaden (§ 122)',
+                          shape: 'triangle',
+                          bubbleColor: '#FFEDD5',
+                          textColor: '#9A3412',
+                          notes:
+                            'Ersatz des negativen Interesses begrenzt auf das Erfüllungsinteresse.',
+                          children: [],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+            {
+              id: 'jura-bgb-delikt',
+              text: 'Schuldrecht: Deliktsrecht (§ 823 I BGB)',
+              shape: 'box',
+              bubbleColor: '#FEF3C7',
+              textColor: '#78350F',
+              children: [
+                {
+                  id: 'jura-delikt-rgv',
+                  text: 'Rechtsgutverletzung (Leben, Körper, Gesundheit, Freiheit, Eigentum)',
+                  shape: 'hexagon',
+                  bubbleColor: '#E0E7FF',
+                  textColor: '#1E3A8A',
+                  children: [],
+                },
+                {
+                  id: 'jura-delikt-haftung',
+                  text: 'Haftungsbegründende Kausalität (Äquivalenz, Adäquanz, Schutzzweck)',
+                  shape: 'diamond',
+                  bubbleColor: '#FFE4E6',
+                  textColor: '#881337',
+                  children: [],
+                },
+                {
+                  id: 'jura-delikt-schuld',
+                  text: 'Rechtswidrigkeit & Verschulden (§ 276 BGB)',
+                  shape: 'triangle',
+                  bubbleColor: '#FFEDD5',
+                  textColor: '#9A3412',
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+        {
+          id: 'jura-stgb-root',
+          text: 'Strafrecht (Dreistufiger Deliktsaufbau)',
+          shape: 'hexagon',
+          bubbleColor: '#0F172A',
+          textColor: '#FFFFFF',
+          notes: 'Grundstruktur materielles Strafrecht',
+          children: [
+            {
+              id: 'jura-stgb-tb',
+              text: 'I. Tatbestand',
+              shape: 'box',
+              bubbleColor: '#FEF3C7',
+              textColor: '#78350F',
+              children: [
+                {
+                  id: 'jura-stgb-obj-tb',
+                  text: 'Objektiver Tatbestand (Handlung, Erfolg, Kausalität, Zurechnung)',
+                  shape: 'hexagon',
+                  bubbleColor: '#E0E7FF',
+                  textColor: '#1E3A8A',
+                  children: [],
+                },
+                {
+                  id: 'jura-stgb-subj-tb',
+                  text: 'Subjektiver Tatbestand (Vorsatz § 15 StGB / Fahrlässigkeit)',
+                  shape: 'diamond',
+                  bubbleColor: '#FFE4E6',
+                  textColor: '#881337',
+                  children: [],
+                },
+              ],
+            },
+            {
+              id: 'jura-stgb-rw',
+              text: 'II. Rechtswidrigkeit',
+              shape: 'box',
+              bubbleColor: '#FEF3C7',
+              textColor: '#78350F',
+              children: [
+                {
+                  id: 'jura-stgb-notwehr',
+                  text: 'Notwehr (§ 32 StGB: Notwehrlage, Handlung, Verteidigungswille)',
+                  shape: 'bubble',
+                  bubbleColor: '#D1FAE5',
+                  textColor: '#064E3B',
+                  children: [],
+                },
+                {
+                  id: 'jura-stgb-notstand',
+                  text: 'Rechtfertigender Notstand (§ 34 StGB: Güterabwägung)',
+                  shape: 'bubble',
+                  bubbleColor: '#D1FAE5',
+                  textColor: '#064E3B',
+                  children: [],
+                },
+              ],
+            },
+            {
+              id: 'jura-stgb-schuld',
+              text: 'III. Schuld & Entschuldigungsgründe (§§ 33, 35 StGB)',
+              shape: 'triangle',
+              bubbleColor: '#FFEDD5',
+              textColor: '#9A3412',
+              children: [],
             },
           ],
         },
